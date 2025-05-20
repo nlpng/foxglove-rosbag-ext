@@ -1,6 +1,17 @@
 import { Immutable, PanelExtensionContext, Topic, PanelExtensionContext as PanelContext } from "@foxglove/extension";
-import { ReactElement, useEffect, useLayoutEffect, useState } from "react";
+import { ReactElement, useLayoutEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+
+type Duration = {
+  secs: number;
+  nsecs: number;
+};
+
+type BagSizeMessage = {
+  data: number;
+};
+
+type DurationMessage = Duration;
 
 type PanelState = {
   bagName: string;
@@ -8,6 +19,8 @@ type PanelState = {
   selectedTopics: string[];
   isRecording: boolean;
   recordingStartTime: number | null;
+  currentBagSize: number;
+  currentDuration: Duration;
   savedBags: Array<{
     name: string;
     size: string;
@@ -24,7 +37,6 @@ function formatDuration(ms: number): string {
 
 function RosbagPanel({ context }: { context: PanelContext }): ReactElement {
   const [topics, setTopics] = useState<undefined | Immutable<Topic[]>>();
-  const [renderDone, setRenderDone] = useState<(() => void) | undefined>();
   const [recordingDuration, setRecordingDuration] = useState<string>("00:00:00");
   const [state, setState] = useState<PanelState>({
     bagName: "",
@@ -32,33 +44,34 @@ function RosbagPanel({ context }: { context: PanelContext }): ReactElement {
     selectedTopics: [],
     isRecording: false,
     recordingStartTime: null,
+    currentBagSize: 0,
+    currentDuration: { secs: 0, nsecs: 0 },
     savedBags: [],
   });
-
-  // Handle recording duration timer
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout | null = null;
-    if (state.isRecording && state.recordingStartTime) {
-      intervalId = setInterval(() => {
-        const duration = Date.now() - state.recordingStartTime!;
-        setRecordingDuration(formatDuration(duration));
-      }, 1000);
-    }
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [state.isRecording, state.recordingStartTime]);
 
   // Set up render handling and parameter watching
   useLayoutEffect(() => {
     context.onRender = (renderState, done) => {
-      setRenderDone(() => done);
       setTopics(renderState.topics);
 
       // Watch for parameter changes
       const bagName = renderState.parameters?.get("/data_recording/bag_name") as string | undefined;
       const outputDir = renderState.parameters?.get("/data_recording/output_directory") as string | undefined;
       const topicList = renderState.parameters?.get("/data_recording/topics") as string[] | undefined;
+
+      // Handle incoming messages
+      if (renderState.currentFrame) {
+        for (const message of renderState.currentFrame) {
+          if (message.topic === "/data_recording/bag_size") {
+            const bagSizeMsg = message.message as BagSizeMessage;
+            setState(prev => ({ ...prev, currentBagSize: bagSizeMsg.data }));
+          } else if (message.topic === "/data_recording/duration") {
+            const durationMsg = message.message as DurationMessage;
+            setState(prev => ({ ...prev, currentDuration: durationMsg }));
+            setRecordingDuration(formatDuration((durationMsg.secs * 1000) + (durationMsg.nsecs / 1000000)));
+          }
+        }
+      }
 
       if (bagName || outputDir || topicList) {
         setState((prev) => ({
@@ -68,48 +81,65 @@ function RosbagPanel({ context }: { context: PanelContext }): ReactElement {
           selectedTopics: topicList ?? prev.selectedTopics,
         }));
       }
+
+      done?.();
     };
 
     // Watch for topics and parameters
     context.watch("topics");
     context.watch("parameters");
-    
-    // Subscribe to recording status topic
-    context.subscribe([{ topic: "/data_recording/status" }]);
-
+    context.watch("currentFrame");
   }, [context]);
 
-  useEffect(() => {
-    renderDone?.();
-  }, [renderDone]);
-
-  const handleStartRecording = () => {
-    // Set parameters
-    context.setParameter("/data_recording/bag_name", { value: state.bagName });
-    context.setParameter("/data_recording/output_directory", { value: state.outputDirectory });
-    context.setParameter("/data_recording/topics", { value: state.selectedTopics });
-    
-    setState((prev) => ({
-      ...prev,
-      isRecording: true,
-      recordingStartTime: Date.now(),
-    }));
+  const handleStartRecording = async () => {
+    try {
+      // Set parameters
+      if (context.setParameter) {
+        await context.setParameter("/data_recording/bag_name", state.bagName);
+        await context.setParameter("/data_recording/output_directory", state.outputDirectory);
+        await context.setParameter("/data_recording/topics", state.selectedTopics);
+      }
+      
+      // Call the start recording service with proper Trigger request format
+      if (context.callService) {
+        await context.callService("/data_recording/start_recording", { request: {} });
+      }
+      
+      setState((prev) => ({
+        ...prev,
+        isRecording: true,
+        recordingStartTime: Date.now(),
+      }));
+    } catch (error) {
+      console.error("Failed to start recording:", error);
+    }
   };
 
-  const handleStopRecording = () => {
-    setState((prev) => {
-      const newBag = {
-        name: prev.bagName,
-        size: "Calculating...",
-        timestamp: new Date().toLocaleString(),
-      };
-      return {
-        ...prev,
-        isRecording: false,
-        recordingStartTime: null,
-        savedBags: [newBag, ...prev.savedBags],
-      };
-    });
+  const handleStopRecording = async () => {
+    try {
+      // Call the stop recording service with proper Trigger request format
+      if (context.callService) {
+        await context.callService("/data_recording/stop_recording", { request: {} });
+      }
+      
+      setState((prev) => {
+        const newBag = {
+          name: prev.bagName,
+          size: `${(prev.currentBagSize / (1024 * 1024)).toFixed(2)} MB`,
+          timestamp: new Date().toLocaleString(),
+        };
+        return {
+          ...prev,
+          isRecording: false,
+          recordingStartTime: null,
+          currentBagSize: 0,
+          currentDuration: { secs: 0, nsecs: 0 },
+          savedBags: [newBag, ...prev.savedBags],
+        };
+      });
+    } catch (error) {
+      console.error("Failed to stop recording:", error);
+    }
   };
 
   return (
