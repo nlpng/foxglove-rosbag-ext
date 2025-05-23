@@ -1,30 +1,40 @@
 # foxglove-rosbag-ext
 
-A [Foxglove](https://foxglove.dev) extension that provides remote control of ROS bag recordings. This extension allows you to manage rosbag recordings directly from the Foxglove Studio interface, making it easier to capture data from remote robots.
+A [Foxglove](https://foxglove.dev) extension panel that provides remote control of ROS bag recordings. This extension allows you to manage rosbag recordings directly from the Foxglove Studio interface, making it easier to capture data from remote robots.
 
 ## Features
 
-- **Remote Recording Control**: Start and stop rosbag recordings from within Foxglove Studio
-- **Topic Selection**: Choose which ROS topics to record
-- **Recording Status**: Real-time feedback on recording status with duration timer
-- **File Management**: Specify output directory and bag name
-- **Recording History**: View list of saved recordings with timestamps
-- **Modern UI**: Clean, dark-themed interface that matches Foxglove's design language
+- **Remote Recording Control**: Start and stop rosbag recordings via ROS services from within Foxglove Studio
+- **Topic Selection**: Interactive checkbox list to choose which ROS topics to record
+- **Real-time Status**: Live recording indicator with duration timer and file size monitoring
+- **Configuration Management**: Specify output directory and bag name with persistent UI state
+- **Recording History**: View list of completed recordings with timestamps and file sizes
+- **Modern UI**: Clean, dark-themed interface that integrates seamlessly with Foxglove's design
 
 ## Requirements
 
 - Foxglove Studio
-- A companion ROS node running on the target system (where recordings will be saved)
+- A companion ROS node running on the target system that implements the required services and publishes status messages
 
 ## ROS Integration
 
-The extension interacts with the following ROS parameters:
-
-- `/data_recording/bag_name`: Name of the rosbag file
+### Parameters
+The extension reads and writes the following ROS parameters:
+- `/data_recording/bag_name`: Name of the rosbag file to create
 - `/data_recording/output_directory`: Directory where rosbag files will be saved
-- `/data_recording/topics`: List of topics to record
+- `/data_recording/topics`: Array of topic names to record
 
-These parameters should be managed by your companion ROS node on the recording system.
+### Services
+The extension calls these ROS services:
+- `/data_recording/start_recording`: Trigger service to begin recording
+- `/data_recording/stop_recording`: Trigger service to end recording
+
+### Topics
+The extension subscribes to these status topics:
+- `/data_recording/bag_size`: std_msgs/Float64 - Current bag file size in bytes
+- `/data_recording/duration`: Duration message - Current recording duration
+
+Your companion ROS node should implement these services and publish the status messages.
 
 ## Installation
 
@@ -47,16 +57,19 @@ Open the Foxglove desktop (or `ctrl-R` to refresh if it is already open). Your e
 ## Usage
 
 1. Open Foxglove Studio
-2. Add the "ROS Bag Recording" panel to your layout
+2. Add the "rosbag-panel" panel to your layout (this extension registers a panel named "rosbag-panel")
 3. Configure the recording settings:
    - Enter a name for your bag file
    - Specify the output directory on the remote system
-   - Select the topics you want to record
-4. Click "Start Recording" to begin capturing data
-5. Monitor the recording status and duration
+   - Use the checkbox list to select which topics you want to record
+4. Click "Start Recording" to begin capturing data (button is disabled until all required fields are filled)
+5. Monitor the live recording status with:
+   - Green recording indicator and status
+   - Real-time duration timer (HH:MM:SS format)
+   - Current file size updates
 6. Click "Stop Recording" when finished
 
-The saved recordings will be stored in the specified output directory on the system where your ROS node is running.
+The saved recordings will appear in the "Saved Recordings" list and be stored in the specified output directory on the system where your ROS node is running.
 
 ## Package
 
